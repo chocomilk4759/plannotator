@@ -6,8 +6,19 @@ This directory contains the Claude Code plugin configuration for Plannotator.
 
 ### Step 1: Install the binary
 
+**macOS / Linux / WSL:**
 ```bash
-npm install -g plannotator
+curl -fsSL https://plannotator.ai/install.sh | bash
+```
+
+**Windows PowerShell:**
+```powershell
+irm https://plannotator.ai/install.ps1 | iex
+```
+
+**Windows CMD:**
+```cmd
+curl -fsSL https://plannotator.ai/install.cmd -o install.cmd && install.cmd && del install.cmd
 ```
 
 ### Step 2: Add the marketplace (in Claude Code)
@@ -57,4 +68,4 @@ If you prefer not to use the plugin system, add this to your `~/.claude/settings
 ## Development
 
 The `server/` directory contains the source code for the Plannotator binary.
-It's compiled and distributed via npm - see the root README for build instructions.
+It's compiled via `bun build --compile` and distributed via GitHub Releases.
