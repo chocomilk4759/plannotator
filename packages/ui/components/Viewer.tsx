@@ -189,16 +189,15 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
       // Try highlighter first (for regular text selections)
       highlighterRef.current?.remove(id);
 
-      // Also handle manually created highlights (for code blocks)
-      const manualHighlight = containerRef.current?.querySelector(`[data-bind-id="${id}"]`);
-      if (manualHighlight) {
-        // Unwrap the mark element, preserving its contents
-        const parent = manualHighlight.parentNode;
-        while (manualHighlight.firstChild) {
-          parent?.insertBefore(manualHighlight.firstChild, manualHighlight);
+      // Handle manually created highlights (may be multiple marks with same ID)
+      const manualHighlights = containerRef.current?.querySelectorAll(`[data-bind-id="${id}"]`);
+      manualHighlights?.forEach(el => {
+        const parent = el.parentNode;
+        while (el.firstChild) {
+          parent?.insertBefore(el.firstChild, el);
         }
-        manualHighlight.remove();
-      }
+        el.remove();
+      });
     },
 
     clearAllHighlights: () => {
@@ -244,35 +243,85 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
         }
 
         try {
-          // Create a unique ID for this restored highlight
-          const newId = ann.id;
+          // Multi-mark approach: wrap each text node portion separately
+          // This avoids destructive extractContents() that breaks DOM structure
+          const textNodes: { node: Text; start: number; end: number }[] = [];
 
-          // Wrap the range with a mark element
-          const wrapper = document.createElement('mark');
-          wrapper.className = 'annotation-highlight';
-          wrapper.dataset.bindId = newId;
+          // Collect all text nodes within the range
+          const walker = document.createTreeWalker(
+            range.commonAncestorContainer.nodeType === Node.TEXT_NODE
+              ? range.commonAncestorContainer.parentNode!
+              : range.commonAncestorContainer,
+            NodeFilter.SHOW_TEXT,
+            null
+          );
 
-          // Add type-specific class
-          if (ann.type === AnnotationType.DELETION) {
-            wrapper.classList.add('deletion');
-          } else if (ann.type === AnnotationType.COMMENT) {
-            wrapper.classList.add('comment');
+          let node: Text | null;
+          let inRange = false;
+
+          while ((node = walker.nextNode() as Text | null)) {
+            // Check if this node is the start container
+            if (node === range.startContainer) {
+              inRange = true;
+              const start = range.startOffset;
+              const end = node === range.endContainer ? range.endOffset : node.length;
+              if (end > start) {
+                textNodes.push({ node, start, end });
+              }
+              if (node === range.endContainer) break;
+              continue;
+            }
+
+            // Check if this node is the end container
+            if (node === range.endContainer) {
+              if (inRange) {
+                const end = range.endOffset;
+                if (end > 0) {
+                  textNodes.push({ node, start: 0, end });
+                }
+              }
+              break;
+            }
+
+            // Node is fully within range
+            if (inRange && node.length > 0) {
+              textNodes.push({ node, start: 0, end: node.length });
+            }
           }
 
-          // surroundContents can fail if range spans multiple elements
-          // In that case, we need to use extractContents + appendChild
-          try {
-            range.surroundContents(wrapper);
-          } catch (e) {
-            // Range spans multiple elements - extract and wrap
-            const fragment = range.extractContents();
-            wrapper.appendChild(fragment);
-            range.insertNode(wrapper);
+          // If we only have one text node and it's fully contained, use simple approach
+          if (textNodes.length === 0) {
+            console.warn(`No text nodes found for annotation ${ann.id}`);
+            return;
           }
 
-          // Make it clickable
-          wrapper.addEventListener('click', () => {
-            onSelectAnnotation(ann.id);
+          // Wrap each text node portion with its own mark (process in reverse to avoid offset issues)
+          textNodes.reverse().forEach(({ node, start, end }) => {
+            try {
+              const nodeRange = document.createRange();
+              nodeRange.setStart(node, start);
+              nodeRange.setEnd(node, end);
+
+              const mark = document.createElement('mark');
+              mark.className = 'annotation-highlight';
+              mark.dataset.bindId = ann.id;
+
+              if (ann.type === AnnotationType.DELETION) {
+                mark.classList.add('deletion');
+              } else if (ann.type === AnnotationType.COMMENT) {
+                mark.classList.add('comment');
+              }
+
+              // surroundContents works reliably for single text node ranges
+              nodeRange.surroundContents(mark);
+
+              // Make it clickable
+              mark.addEventListener('click', () => {
+                onSelectAnnotation(ann.id);
+              });
+            } catch (e) {
+              console.warn(`Failed to wrap text node for annotation ${ann.id}:`, e);
+            }
           });
         } catch (e) {
           console.warn(`Failed to apply highlight for annotation ${ann.id}:`, e);
